@@ -105,10 +105,9 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     localStorage.removeItem('haqms_token');
     localStorage.removeItem('haqms_user');
-    setToken(null);
-    setUser(null);
-    // Use window.location for a full page reload to clear all state cleanly
-    window.location.href = '/login';
+    // Navigate first before clearing state — prevents dashboard flash on null user
+    // replace() removes dashboard from browser history so back button won't return to it
+    window.location.replace('/login');
   };
 
   return (
