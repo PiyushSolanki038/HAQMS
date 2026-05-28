@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import Navbar from '@/components/common/Navbar';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { 
   Users, CalendarDays, Activity, Search, Sparkles, UserPlus, 
   Trash2, ClipboardList, TrendingUp, DollarSign, Award, Clock,
@@ -740,8 +741,8 @@ export default function Dashboard() {
 
               <div className="space-y-6">
                 <div className="p-4 rounded-xl border border-teal-500/25 bg-teal-500/10 text-slate-700 dark:text-slate-300 text-xs leading-5">
-                  <strong>Token Generation Engine Note:</strong> Direct arrivals bypass appointments. The token engine automatically fetches the current days maximum token size and increments. 
-                  <span className="block mt-1 font-bold text-rose-500 uppercase tracking-wide">Warning: Vulnerable to check-in race conditions!</span>
+                  <strong>Token Generation Engine:</strong> Direct arrivals bypass appointments. The token engine automatically assigns the next available token number for the selected physician.
+                  <span className="block mt-1 font-bold text-teal-600 dark:text-teal-400 uppercase tracking-wide">Race condition fixed: Token assignment uses a serializable DB transaction.</span>
                 </div>
 
                 <div className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
@@ -889,12 +890,11 @@ export default function Dashboard() {
                 <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
                   <h4 className="font-bold text-slate-400 uppercase tracking-wider">Clinical Background Information</h4>
                   
-                  {/* FRONTEND CRASH BUG:
-                      Assuming medicalHistory is always populated. Accesses a method on a nullable property
-                      without optional chaining! If medicalHistory is null (which is the case for Batman, Clark Kent, etc.),
-                      this code throws: "Cannot read properties of null (reading 'toUpperCase')" and crashes the app! */}
+                  {/* FIX: Added optional chaining — medicalHistory can be null for patients without history */}
                   <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
-                    {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    {selectedPatientHistory.medicalHistory
+                      ? selectedPatientHistory.medicalHistory.toUpperCase()
+                      : 'No medical history on record.'}
                   </p>
                 </div>
 
@@ -1098,7 +1098,7 @@ export default function Dashboard() {
                 Staff Physicians Registry Lookup
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
-                Database lookup for credentials. Uses a raw SQL interpolation backend query.
+                Search physicians by name or specialization.
               </p>
             </div>
 
@@ -1111,7 +1111,7 @@ export default function Dashboard() {
                   type="text"
                   value={adminSearchQuery}
                   onChange={(e) => setAdminSearchQuery(e.target.value)}
-                  placeholder="Enter physician name search criteria (raw syntax supported)..."
+                  placeholder="Search by physician name or specialization..."
                   className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                 />
               </div>
@@ -1124,14 +1124,12 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="p-3 bg-rose-500/10 text-rose-500 text-xs rounded-lg border border-rose-500/20 font-semibold leading-5 flex gap-3">
-              <ShieldAlert className="h-5 w-5 shrink-0" />
+            <div className="p-3 bg-teal-500/10 text-teal-600 dark:text-teal-400 text-xs rounded-lg border border-teal-500/20 font-semibold leading-5 flex gap-3">
+              <CheckCircle className="h-5 w-5 shrink-0" />
               <div>
-                <strong>SQL Vulnerability alert:</strong> This search executes raw interpolation: 
-                <code className="block bg-black/10 dark:bg-black/30 p-1.5 rounded mt-1 font-mono">
-                  SELECT * FROM &quot;Doctor&quot; WHERE name ILIKE &apos;%&#123;query&#125;%&apos;
-                </code>
-                Can be audited by inputting standard SQL injection strings to leak full user login lists.
+                <strong>Security Fixed:</strong> Search now uses Prisma parameterized queries with{' '}
+                <code className="bg-black/10 dark:bg-black/30 px-1 py-0.5 rounded font-mono">mode: &apos;insensitive&apos;</code>
+                {' '}instead of raw SQL string interpolation. SQL injection is no longer possible.
               </div>
             </div>
 

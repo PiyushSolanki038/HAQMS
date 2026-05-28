@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Navbar from '@/components/common/Navbar';
 import { Activity, Bell, Monitor, RefreshCw, AlertCircle } from 'lucide-react';
 
@@ -8,17 +8,13 @@ export default function QueueMonitor() {
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  
-  // Duplicated config state just to add minor code smell
   const [refreshCount, setRefreshCount] = useState(0);
 
-  // HARDCODED API BASE URL: Duplicated from AuthContext (code duplication smell)
-  const API_BASE_URL = 'http://localhost:5000/api';
+  // FIX: Use environment variable instead of hardcoded URL
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000/api';
 
-  const fetchQueueData = async () => {
+  const fetchQueueData = useCallback(async () => {
     try {
-      // Insecure: Fetches queue without checking credentials (it's a public dashboard, which is fine, 
-      // but it uses the hardcoded API domain)
       const res = await fetch(`${API_BASE_URL}/queue`);
       if (!res.ok) {
         throw new Error('Failed to retrieve active token queue.');
@@ -32,27 +28,20 @@ export default function QueueMonitor() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [API_BASE_URL]);
 
   useEffect(() => {
-    // Initial fetch
     fetchQueueData();
 
-    // MEMORY LEAK BUG:
-    // This setInterval has NO cleanup function (does not return clearInterval).
-    // Every time this page is mounted, a new background polling timer is spun up.
-    // If the candidate navigates between Dashboard and Queue multiple times,
-    // dozens of parallel intervals will poll the database, causing memory bloat,
-    // state update crashes on unmounted components, and heavy server load.
+    // FIX: Return cleanup function to clear interval on unmount — was missing,
+    // causing memory leak where each page mount added a new interval forever.
     const intervalId = setInterval(() => {
-      console.log(`[POLL] Active Queue Poll #${refreshCount + 1} firing...`);
       fetchQueueData();
       setRefreshCount((prev) => prev + 1);
     }, 3000);
 
-    // Junior Developer Note: "Interval created, will run forever to keep dashboard fully synced!"
-    // Missing: return () => clearInterval(intervalId);
-  }, []); // Note that refreshCount dependency is missing too, causing stale closure on log!
+    return () => clearInterval(intervalId);
+  }, [fetchQueueData]);
 
   // Group tokens by doctor
   const groupedTokens = tokens.reduce((groups, token) => {
@@ -65,7 +54,7 @@ export default function QueueMonitor() {
         waiting: [],
       };
     }
-    
+
     if (token.status === 'CALLING') {
       groups[docId].calling = token;
     } else if (token.status === 'WAITING') {
@@ -77,7 +66,7 @@ export default function QueueMonitor() {
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
-      
+
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 sm:p-8">
         {/* Header Dashboard Banner */}
         <div className="glass p-6 sm:p-8 rounded-2xl shadow-lg border border-slate-200 dark:border-slate-800 mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -94,7 +83,7 @@ export default function QueueMonitor() {
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-500/15 text-teal-600 dark:text-teal-400 text-xs font-bold uppercase tracking-wide border border-teal-500/20">
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -158,7 +147,6 @@ export default function QueueMonitor() {
                     </h4>
                     {docInfo.calling ? (
                       <div className="bg-teal-500/10 dark:bg-teal-500/5 border border-teal-500/30 p-6 rounded-2xl text-center shadow-inner relative overflow-hidden group">
-                        {/* Glowing radial accent */}
                         <div className="absolute inset-0 bg-radial-gradient(circle, rgba(20,184,166,0.1) 0%, transparent 80%) opacity-0 group-hover:opacity-100 transition-opacity"></div>
                         <span className="block text-5xl font-black text-teal-600 dark:text-teal-400 tracking-wider animate-pulse">
                           #{docInfo.calling.tokenNumber}
