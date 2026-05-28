@@ -1,240 +1,177 @@
-# Video Recording Script — HAQMS Internship Assignment
-**Figital Labs Full Stack Web Development Internship**  
-**Target Duration:** 10–14 minutes  
-**Tool:** Loom / OBS / any screen recorder
+# Video Script — HAQMS Internship Assignment
+**Target length:** 10–14 minutes  
+**Keep it natural — don't read word for word, just use this as a guide**
 
 ---
 
-## Before You Start Recording
+## Before you start recording
 
-Open these things on your screen before pressing Record:
-- VS Code with the HAQMS project open
-- A browser at `http://localhost:3000`
-- A terminal with the backend running
-
----
-
-## PART 1 — Introduction (0:00 – 1:00)
-
-**Say:**
-
-> "Hi, my name is Piyush Solanki. This is my submission for the Figital Labs full stack internship assignment. The project is HAQMS — a Hospital Appointment and Queue Management System built with Next.js, Express.js, and PostgreSQL.
->
-> The repo was intentionally seeded with bugs across five categories: security vulnerabilities, backend performance problems, database inefficiencies, frontend issues, and an incomplete feature. In this video, I'll walk through the major issues I found, the fixes I implemented, and then show the working application."
+Have these open:
+- Browser at https://haqms-q1qr.vercel.app
+- VS Code with the HAQMS project
+- Terminal (just in case)
 
 ---
 
-## PART 2 — Application Overview (1:00 – 2:30)
+## Part 1 — Quick Intro (0:00 to 0:45)
 
-**Show the running app in the browser.**
+Just look at the camera and say something like:
 
-**Say:**
-
-> "Let me quickly show you what the application does. This is the landing page — you have two entry points: the Staff Portal and the Live Public Monitor."
-
-→ Click **Live Public Monitor**
-
-> "This is the public queue board. It polls the backend every 3 seconds and shows which patients are currently being called by each doctor. As we'll see shortly, this page had a serious memory leak."
-
-→ Go back, click **Staff Portal → Login**
-
-> "The staff login supports three roles: Admin, Receptionist, and Doctor. Let me log in as a Receptionist first."
-
-→ Click the quick-fill button for **Receptionist** → Login
-
-> "As a receptionist I can manage the patient directory, book appointments, and check in walk-in patients to the queue."
-
-→ Click **Scheduling / Check-in Portal**
-
-> "I can book appointment slots and generate queue tokens. Now let me switch to the Doctor role."
-
-→ Logout → Login as **Doctor (doctor1@haqms.com)**
-
-> "As a doctor I see my scheduled bookings and can control the calling queue — moving patients from waiting to calling to completed."
-
-→ Logout → Login as **Admin**
-
-> "And as admin I have a reports dashboard and can search the physician registry."
+> "Hey, I'm Piyush Solanki and this is my submission for the Figital Labs internship assignment. So the project is called HAQMS — a Hospital Appointment and Queue Management System. The idea was that the repo was intentionally broken in different ways, and I had to go through it, figure out what was wrong, and fix it. In this video I'll walk you through what I found and what I did about it. Let me start by showing the app itself, then I'll go through the code."
 
 ---
 
-## PART 3 — Security Fixes (2:30 – 5:30)
+## Part 2 — Show the App (0:45 to 2:30)
 
-### 3A — SQL Injection (Show in VS Code)
+Open the browser at **https://haqms-q1qr.vercel.app**
 
-**Open `backend/src/routes/doctors.js`**
+> "So this is the live deployed app. You've got two options from the homepage — the Staff Portal which is the main dashboard, and a Live Queue Monitor which is a public screen showing which patients are being called."
 
-**Say:**
+Click **Live Queue Monitor**
 
-> "The most critical bug was a SQL injection vulnerability in the doctor search endpoint. Look at the original code — it was concatenating user input directly into a raw SQL string using `$queryRawUnsafe`. An attacker could type something like `House' UNION SELECT id, email, password FROM User --` and leak every user's password hash from the database."
+> "This auto-refreshes every 3 seconds. It groups tokens by doctor and shows who's being called right now. This page actually had a pretty bad memory leak which I'll show in a bit."
 
-→ Show the **fixed code** (the current file with `prisma.doctor.findMany`)
+Go back → click **Staff Portal** → Login page appears
 
-> "My fix was to eliminate raw SQL entirely and use Prisma's parameterized `findMany` with `mode: 'insensitive'` for case-insensitive search. Prisma handles parameterization automatically — there's no way to inject SQL through the `contains` filter."
+> "There are three roles — Admin, Receptionist, and Doctor. Let me log in as Receptionist first."
 
-→ **Demonstrate in the browser**: Go to Admin → Physician Registry → type a normal search like "House" → shows results correctly.
+Click the **Receptionist** quick-fill button → Sign In → dashboard loads
 
----
+> "As a receptionist I can register patients, book appointments, and check in walk-in patients to the queue."
 
-### 3B — Broken Admin Authorization (Show in VS Code)
+Switch to the **Scheduling tab** briefly → then logout
 
-**Open `backend/src/middleware/auth.js`**
+Login as **Doctor (doctor1@haqms.com)**
 
-**Say:**
+> "As a doctor I see my scheduled appointments and I can manage the calling queue — moving patients from waiting to calling to completed."
 
-> "The second security issue was in the `authorizeAdminOnlyLegacy` middleware. A junior developer had commented out the role check because it was 'causing issues during testing.' This meant any authenticated user — a receptionist or doctor — could call the admin-only DELETE patient endpoint."
+Click a patient name (click **Bruce Wayne** specifically)
 
-→ Show the **fixed code** (current file with `role !== 'ADMIN'` check)
+> "Notice now it shows 'No medical history on record' — this was actually a crash before. I'll show that in the code."
 
-> "The fix was simple — restore the two lines that were commented out. Now only users with the ADMIN role can delete patient records."
+Logout → Login as **Admin**
 
----
-
-### 3C — JWT & Password Issues (Show in VS Code)
-
-**Open `backend/src/routes/auth.js`**
-
-**Say:**
-
-> "In the auth route I found three problems: passwords were being printed to the console in plaintext on every login, the registration response was returning the hashed password to the client — which is a security leak — and JWT tokens were set to expire after 365 days, meaning a stolen token would work for a year. I fixed all three: removed the console logs, filtered the registration response to only return safe fields, and changed the expiry to 24 hours."
+> "And the admin gets a reports dashboard and a physician search. The reports endpoint was extremely slow, I'll show that too."
 
 ---
 
-## PART 4 — Performance Fixes (5:30 – 8:00)
+## Part 3 — Security Fixes (2:30 to 5:30)
 
-### 4A — N+1 Query Problem (Show in VS Code)
+### SQL Injection fix
 
-**Open `backend/src/routes/appointments.js`**
+Open VS Code → open `backend/src/routes/doctors.js`
 
-**Say:**
+> "Okay so let me start with the most serious one — there was a SQL injection vulnerability right here in the doctor search. Look, it was using `$queryRawUnsafe` and building the query by just concatenating the user's input directly into a SQL string."
 
-> "The appointments endpoint had a classic N+1 query problem. It fetched all appointments, then looped through each one and issued two separate database queries to get the patient and doctor details. With 50 appointments that's 101 database round-trips. With 500 it's 1001."
+Point to the current code (the fixed version)
 
-→ Show the **fixed code** with `include`
-
-> "The fix is one line — use Prisma's `include` to join the related data in the initial query. Now it's always exactly one database query regardless of how many appointments exist."
+> "What I changed it to is Prisma's normal `findMany` with a `contains` filter. Prisma parameterizes everything under the hood, so there's no way to inject SQL through this. The original code could've been exploited to dump the entire users table including password hashes."
 
 ---
 
-### 4B — Race Condition in Queue Check-In (Show in VS Code)
+### Bypassed admin check
 
-**Open `backend/src/routes/queue.js`**
+Open `backend/src/middleware/auth.js`
 
-**Say:**
-
-> "The queue check-in had a race condition in token number assignment. The original code read the max token number, then waited 350 milliseconds — artificially — and then created the new token. If two patients checked in at the same time, both requests would read the same max value and both create token number 6, resulting in duplicates in the queue."
-
-→ Show the **fixed code** with `$transaction({ isolationLevel: 'Serializable' })`
-
-> "I fixed this using a PostgreSQL serializable transaction. The serializable isolation level ensures that two concurrent transactions can never read the same max value and both commit successfully — one of them will be forced to retry. And I removed the fake 350ms sleep entirely."
+> "This one really surprised me. There's a function called `authorizeAdminOnlyLegacy` that's supposed to restrict certain actions to admins only — like deleting patients. But when I looked at it, the actual role check was commented out. There was a comment saying it was 'causing issues during testing.' So essentially any logged-in user could delete any patient record. I just uncommented those two lines and it works correctly now."
 
 ---
 
-### 4C — Reports Nested Loop (Briefly mention)
+### Passwords being logged
 
-**Say:**
+Open `backend/src/routes/auth.js`
 
-> "The admin reports endpoint was looping through every doctor and running 5 sequential database queries per doctor, plus an 80ms artificial delay per doctor. With 5 doctors that was already 400ms of fake waiting. I replaced this with `Promise.all` to run all doctor queries in parallel, cutting the response time from 600ms+ down to under 50ms. I'll show this in the demo — look at the `timeTakenMs` value in the report."
-
-→ **Demonstrate in browser:** Login as Admin → System Audit Reports → click **Load Doctor System Audit Report** → point to the `timeTakenMs` in the performance diagnostic banner (should now be very fast).
+> "In the auth routes I found that every single login attempt was printing the email and password to the console in plaintext. So anyone with access to the server logs could see user passwords. I removed those logs. I also noticed the registration response was sending back the hashed password in the JSON — there's no reason for that, so I filtered it out and only return the safe fields now. And the token expiry was set to 365 days, I changed that to 24 hours."
 
 ---
 
-## PART 5 — Database & Frontend Fixes (8:00 – 10:00)
+## Part 4 — Performance Fixes (5:30 to 8:00)
 
-### 5A — In-Memory Pagination (Briefly)
+### N+1 queries
 
-**Say:**
+Open `backend/src/routes/appointments.js`
 
-> "The patient listing was fetching every single patient from the database into memory and then filtering and paginating in JavaScript. I moved all filtering and pagination into the SQL query using Prisma's `skip`, `take`, and `count` — so only the 5 records needed for the current page ever cross the network."
-
----
-
-### 5B — Frontend Memory Leak (Show in VS Code)
-
-**Open `frontend/src/app/queue/page.js`**
-
-**Say:**
-
-> "The public queue monitor had a memory leak. The `useEffect` started a 3-second polling interval but never returned a cleanup function. Every time you navigated away from and back to this page, a new interval was created without the old one being cleared. After 10 navigations you'd have 10 timers running simultaneously. The fix is one line — `return () => clearInterval(intervalId)`."
+> "This is a classic N+1 problem. The original code fetched all appointments first, then for every single appointment it ran two more database queries — one for the patient details, one for the doctor details. So with 50 appointments you're doing 101 database queries for one API call. The fix is just using Prisma's `include` in the initial query so everything comes back in one shot."
 
 ---
 
-### 5C — Null Crash on Medical History (Show in Browser)
+### Race condition in queue
 
-**Say:**
+Open `backend/src/routes/queue.js`
 
-> "The doctor dashboard was crashing whenever you clicked a patient with no medical history. The code called `.toUpperCase()` directly on `medicalHistory` without checking for null first. Patients like Bruce Wayne and Clark Kent have null medical history — clicking them would crash the entire dashboard. I fixed this with a simple null check and a fallback message."
-
-→ **Demonstrate in browser:** Login as Doctor → click a patient without history (Bruce Wayne or Clark Kent) → show it now displays "No medical history on record." instead of crashing.
+> "This was an interesting one. The queue check-in was reading the max token number, then — and there's literally an artificial `setTimeout` of 350ms here to make it worse — then inserting a new token with max + 1. If two patients check in at the same time, both requests read the same max value and both try to create the same token number. Classic race condition. I wrapped the whole read-and-write in a serializable database transaction. PostgreSQL handles the rest — if two transactions try to do the same thing, one of them retries automatically. And obviously I removed the fake delay."
 
 ---
 
-## PART 6 — Incomplete Feature Demo (10:00 – 11:30)
+### Reports endpoint
 
-**Say:**
+Open `backend/src/routes/reports.js`
 
-> "Finally, the assignment had a missing route. The doctor worklist had a 'View Diagnostic Reports Details' link for each patient that pointed to `/patients/[id]/history-records` — but this page didn't exist. Clicking it would give a 404."
+> "The reports endpoint was doing something similar — looping through every doctor and running 5 separate database queries per doctor, all one after another. Plus there was an 80ms fake sleep per doctor. I switched it to Promise.all so all the queries run in parallel instead of waiting for each other."
 
-→ **Demonstrate in browser:** Login as Doctor → click a patient name → click **View Diagnostic Reports Details** → the new page opens showing patient info, medical history, and appointment history.
+Show in the browser — login as Admin → load the report → point to the `timeTakenMs` value
 
-> "I built this page from scratch. It fetches the patient's full profile including their appointment history, handles loading and error states, and has a 'Back to Dashboard' link. It's fully integrated with the auth system and only accessible to logged-in staff."
-
----
-
-## PART 7 — Deployment & Final Summary (11:30 – 13:30)
-
-**Say:**
-
-> "The application is also deployed. I deployed the backend as a Vercel serverless Node.js app and the frontend as a standard Next.js Vercel deployment. The database is hosted on Neon — free-tier managed PostgreSQL. The backend exports the Express app as `module.exports = app` for Vercel's serverless runtime, and CORS is configured to only accept requests from the deployed frontend URL via an environment variable."
-
-→ **Show the live deployed URL** in the browser
-
-> "Let me do a final quick demo on the deployed version — login as admin, load the report, and show the queue monitor."
+> "You can see the execution time here. It's now fast."
 
 ---
 
-**Final words:**
+## Part 5 — Frontend and Database (8:00 to 10:00)
 
-> "To summarize — I identified and fixed 14 bugs across all five categories: 4 security issues including a SQL injection, 4 performance issues including a race condition and N+1 problem, 2 database optimizations, 3 frontend bugs including a memory leak and a null crash, and I built the missing patient history page. The approach I took was to prioritize by severity — security and data integrity first, performance and UX second. All fixes are in my forked GitHub repository and the full documentation is in `DOCUMENTATION.md` in the project root. Thank you for reviewing my submission."
+### Memory leak
 
----
+Open `frontend/src/app/queue/page.js`
 
-## Recording Tips
-
-- Use **1080p** resolution minimum
-- Speak clearly and at a **steady pace** — don't rush
-- Keep your browser **zoomed to 110%** so the UI is readable
-- Use **VS Code's split-pane view** when comparing before/after code
-- Have your `.env` files ready — the app should start in under 5 seconds
-- Keep Loom/OBS open — record the whole screen, not just a window
-- Aim for **10–14 minutes** — don't go over 15 minutes
+> "The queue monitor page had a memory leak. It sets up a `setInterval` that polls every 3 seconds, but there was no cleanup function in the `useEffect`. Every time you navigate to this page and back, a new interval gets created on top of the old one. After a while you've got dozens of timers all running. The fix is one line — return a cleanup function that calls `clearInterval`."
 
 ---
 
-## Quick Reference — Login Credentials
+### Null crash
 
-| Role | Email | Password |
-|---|---|---|
-| Admin | admin@haqms.com | password123 |
-| Receptionist | reception1@haqms.com | password123 |
-| Doctor | doctor1@haqms.com | password123 |
+Back to the browser — show the appointment list as Doctor → click Bruce Wayne
+
+> "This one was causing the whole dashboard to crash. The code was calling `.toUpperCase()` directly on the medical history field without checking if it was null first. Several patients in the seed data have no medical history — Bruce Wayne, Clark Kent, Diana Prince. Clicking any of them would throw an error and break the page. I added a null check so it shows a fallback message instead."
 
 ---
 
-## Quick Reference — Key Files Changed
+### Pagination
 
-| File | What was fixed |
-|---|---|
-| `backend/src/middleware/auth.js` | Admin role check, token expiry |
-| `backend/src/routes/auth.js` | Password logging, hash in response, JWT expiry |
-| `backend/src/routes/doctors.js` | SQL injection, sequential async calls |
-| `backend/src/routes/appointments.js` | N+1 queries, double-booking check |
-| `backend/src/routes/queue.js` | Race condition, removed 350ms sleep |
-| `backend/src/routes/reports.js` | Nested loop, removed 80ms×N sleep |
-| `backend/src/routes/patients.js` | In-memory pagination, phone validation |
-| `backend/prisma/schema.prisma` | Added 7 missing database indexes |
-| `frontend/src/app/queue/page.js` | Memory leak (clearInterval), env var |
-| `frontend/src/app/dashboard/page.js` | Null crash, Link import, UI banners |
-| `frontend/src/context/AuthContext.js` | Hardcoded URL → env variable |
-| `frontend/src/app/patients/[id]/history-records/page.js` | **New** — patient history page |
+> "The patients list endpoint was loading every single patient from the database into memory and then filtering and paginating in JavaScript. I moved all of that into the SQL query using Prisma's skip and take, so only the records you actually need are fetched. I also added proper database indexes to the schema for columns that are frequently used in queries."
+
+---
+
+## Part 6 — Missing Feature (10:00 to 11:30)
+
+In the browser as Doctor → click a patient → click **"View Diagnostic Reports Details"** link
+
+> "This link was going to a 404 before — the page just didn't exist. I built it. It shows the patient's profile, their medical history if they have one, and a full table of all their past appointments. It handles the case where there's no history, and it has a back button to the dashboard."
+
+---
+
+## Part 7 — Wrap Up (11:30 to 13:00)
+
+> "So to summarize what I fixed — four security issues including a SQL injection and a completely bypassed admin check, four performance issues including an N+1 problem and a race condition in the queue, two database improvements around pagination and missing indexes, three frontend bugs including a memory leak and a null crash, and I built the missing patient history page."
+
+> "I deployed everything on Vercel — backend is a serverless Express app, frontend is Next.js, and the database is on Neon which is a managed PostgreSQL service. The first request might be a bit slow because Neon's free tier goes to sleep after inactivity, but after that it's fine."
+
+> "The full documentation with all the details is in DOCUMENTATION.md in the repo. My GitHub is github.com/PiyushSolanki038/HAQMS. Thanks for watching."
+
+---
+
+## Quick Reference
+
+**Login credentials (all use password123):**
+- Admin → admin@haqms.com
+- Receptionist → reception1@haqms.com
+- Doctor → doctor1@haqms.com
+
+**Live URLs:**
+- Frontend → https://haqms-q1qr.vercel.app
+- Backend → https://haqms-backend-eight.vercel.app
+- GitHub → https://github.com/PiyushSolanki038/HAQMS
+
+**Recording tips:**
+- Talk at a normal pace, don't rush
+- It's okay to pause and think — makes it sound real
+- You don't need to read this script word for word, just follow the flow
+- If you mess up, just keep going — minor mistakes are fine
+- Keep browser zoom at around 110% so everything is readable

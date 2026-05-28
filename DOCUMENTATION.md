@@ -1,403 +1,229 @@
-# HAQMS — Bug Fix & Optimization Report
-**Figital Labs Full Stack Internship Assignment**  
-**Candidate:** Piyush Solanki  
+# HAQMS – Bug Fixes & Improvements
+**Submitted by:** Piyush Solanki  
 **Email:** piyushsolanki381@gmail.com  
 **Date:** May 28, 2026
 
 ---
 
-## Overview
+## What is this project?
 
-HAQMS (Hospital Appointment & Queue Management System) is a full-stack web application built with Next.js, Express.js, and PostgreSQL (Prisma ORM). The repository was intentionally seeded with security vulnerabilities, performance bottlenecks, database inefficiencies, frontend bugs, and incomplete features across five categories.
+HAQMS stands for Hospital Appointment and Queue Management System. It's a full-stack web app built with Next.js on the frontend, Express.js on the backend, and PostgreSQL as the database using Prisma ORM. The repo was intentionally filled with bugs across five different areas — security, performance, database, frontend, and some incomplete features — and the goal was to find and fix as many as I could.
 
-This document describes every issue I identified, the fix I implemented, and the reasoning behind each decision.
+I went through the entire codebase file by file, ran the app locally, tested each endpoint, and made notes on everything that looked wrong. Below is what I found and what I did about it.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 16 (App Router) + Tailwind CSS |
-| Backend | Node.js + Express.js |
-| Database | PostgreSQL 15 (Docker) + Prisma ORM |
-| Auth | JWT (jsonwebtoken + bcryptjs) |
-| Deployment | Vercel (frontend + backend), Neon PostgreSQL |
+- **Frontend** — Next.js 16 (App Router) + Tailwind CSS
+- **Backend** — Node.js + Express.js
+- **Database** — PostgreSQL + Prisma ORM
+- **Auth** — JWT tokens with bcryptjs
+- **Deployed on** — Vercel (both frontend and backend), Neon for PostgreSQL
 
 ---
 
-## Issues Identified & Fixes Implemented
+## Issues I Found and Fixed
 
-### Category 1: Security Vulnerabilities
-
----
-
-#### Bug S-1: Broken Authorization Middleware (`middleware/auth.js`)
-
-**Issue:** The `authorizeAdminOnlyLegacy` middleware had its role check commented out with a note saying "causing issues during testing." This meant any authenticated user — receptionist or doctor — could perform admin-only actions like deleting patient records.
-
-```js
-// BEFORE (broken — anyone gets through):
-const authorizeAdminOnlyLegacy = (req, res, next) => {
-  if (!req.user) return res.status(401).json({ error: 'Unauthorized.' });
-  // if (req.user.role !== 'ADMIN') { ... }  ← commented out!
-  next();
-};
-```
-
-**Fix:** Restored the admin role check.
-
-```js
-// AFTER (fixed):
-const authorizeAdminOnlyLegacy = (req, res, next) => {
-  if (!req.user) return res.status(401).json({ error: 'Unauthorized.' });
-  if (req.user.role !== 'ADMIN') {
-    return res.status(403).json({ error: 'Access denied. Admin only.' });
-  }
-  next();
-};
-```
-
-**Why it matters:** Without this fix, a receptionist could delete any patient record simply by calling the DELETE endpoint with their own valid token.
+### 1. Security Issues
 
 ---
 
-#### Bug S-2: JWT Token Never Expires (`middleware/auth.js`)
+**Anyone could delete patients (broken admin check)**
 
-**Issue:** The JWT verification used `{ ignoreExpiration: true }`, so even expired tokens (e.g., stolen tokens) would be accepted forever.
+When I looked at the middleware file, I saw the `authorizeAdminOnlyLegacy` function had the actual role check commented out. There was a comment saying a junior dev commented it out because it was "causing issues during testing." This meant literally anyone logged in — even a receptionist — could call the DELETE patient endpoint and it would go through.
 
-**Fix:** Removed `ignoreExpiration`. Also reduced the token expiry from 365 days to 24 hours.
-
-**Reasoning:** Short-lived tokens limit the blast radius of a stolen token. 24 hours is a reasonable balance between security and UX for a hospital staff application.
+Fix was simple — just uncomment the two lines that check `req.user.role !== 'ADMIN'`. Now only admin accounts can delete patients.
 
 ---
 
-#### Bug S-3: SQL Injection in Doctor Search (`routes/doctors.js`)
+**JWT tokens that never expire**
 
-**Issue:** The search and specialization query parameters were directly concatenated into a raw SQL string:
+The `authenticate` middleware had `ignoreExpiration: true` passed to `jwt.verify()`. This means even if someone got hold of an old token, it would work forever — no matter how old it was. On top of that, new tokens were being generated with a 365-day expiry.
 
-```js
-// BEFORE — attackable:
-conditions.push(`name ILIKE '%${search}%'`);
-const doctors = await prisma.$queryRawUnsafe(query);
-```
-
-An attacker could input: `House%' UNION SELECT id, email, password, name... FROM "User" --` and leak the entire user table including password hashes.
-
-**Fix:** Replaced raw SQL entirely with Prisma's type-safe `findMany` with parameterized filters:
-
-```js
-// AFTER — safe:
-where.name = { contains: search, mode: 'insensitive' };
-const doctors = await prisma.doctor.findMany({ where });
-```
-
-**Why:** Prisma's query builder handles parameterization automatically. Using `$queryRawUnsafe` with string interpolation should never appear in production code.
+I removed `ignoreExpiration` so tokens properly expire, and changed the expiry from 365 days down to 24 hours. Much more reasonable for a hospital staff app.
 
 ---
 
-#### Bug S-4: Plaintext Password Logging + Hash in API Response + Error Stack Leakage (`routes/auth.js`)
+**SQL injection in the doctor search**
 
-**Issues found in three places:**
-1. `console.log` printed raw passwords on every login and register request
-2. The registration response included the user's hashed password in the JSON body
-3. Login error response included `error.stack` (full Node.js stack trace with file paths)
+This one was serious. The doctor search endpoint was building SQL queries by directly concatenating user input into a string, then running it with `$queryRawUnsafe`. You could literally type `House' UNION SELECT id, email, password FROM "User" --` into the search box and get back every user's password hash from the database.
 
-**Fixes:**
-- Removed all `console.log` lines containing request body data
-- Filtered the registration response to only return `{ id, email, name, role }`
-- Removed `errorStack: error.stack` from error responses (stack only visible in `development` env)
+I replaced the whole raw SQL approach with Prisma's normal `findMany` with a `contains` filter. Prisma handles parameterization automatically so this kind of attack is not possible anymore.
 
 ---
 
-### Category 2: Backend Performance
+**Passwords being logged and hash returned in API response**
+
+Two things I noticed in the auth routes — first, every login and registration attempt was printing the raw password to the console via `console.log`. In production, anyone with log access could see user passwords in plaintext.
+
+Second, the registration endpoint was returning the full user object in the response, which included the hashed password. Even though it's hashed, there's no reason to send that to the client.
+
+Also the login error was returning `error.stack` — the full Node.js stack trace with file paths and everything.
+
+Fixed all three: removed the console logs, filtered the response to only return safe fields (id, email, name, role), and removed the stack trace from error responses.
 
 ---
 
-#### Bug P-1: N+1 Query Problem (`routes/appointments.js`)
-
-**Issue:** The appointments endpoint fetched all appointments first, then looped through each and issued 2 separate DB queries to get the patient and doctor:
-
-```js
-// BEFORE: 1 + (2 × N) queries for N appointments
-for (const app of appointments) {
-  const patient = await prisma.patient.findUnique({ where: { id: app.patientId } });
-  const doctor = await prisma.doctor.findUnique({ where: { id: app.doctorId } });
-}
-```
-
-With 100 appointments this becomes 201 database round-trips.
-
-**Fix:** Used Prisma's `include` to join in a single query:
-
-```js
-// AFTER: Always 1 query regardless of appointment count
-const appointments = await prisma.appointment.findMany({
-  where,
-  include: {
-    patient: { select: { id, name, phoneNumber, age, medicalHistory } },
-    doctor: { select: { id, name, specialization } },
-  },
-});
-```
+### 2. Performance Issues
 
 ---
 
-#### Bug P-2: Sequential Async DB Calls (`routes/doctors.js`)
+**N+1 query problem in appointments**
 
-**Issue:** The `/doctors/stats` endpoint ran 4 independent database queries sequentially with `await`, meaning each one waited for the previous to complete even though none depended on each other.
+The appointments endpoint was doing something that's a classic backend mistake. It would first fetch all appointments, then loop through each one and run two separate database queries — one for the patient, one for the doctor. So if there were 50 appointments, that's 1 + 100 = 101 database queries for a single API call.
 
-**Fix:** Wrapped all 4 queries in `Promise.all()` for parallel execution, cutting the response time to roughly the duration of the slowest single query.
-
----
-
-#### Bug P-3: Nested Loop Aggregation in Reports (`routes/reports.js`)
-
-**Issue:** The admin reports endpoint looped through every doctor and issued **5 sequential database queries per doctor** plus an artificial 80ms sleep delay. With 5 doctors that's ~400ms of fake delay alone, plus 25+ DB round-trips.
-
-**Fix:** Used `Promise.all` to run all doctor stat queries in parallel, removed the artificial sleep, and computed revenue mathematically instead of re-fetching appointment records.
-
-**Result:** Report generation dropped from ~600ms+ to under 50ms.
+The fix is one line — add `include: { patient: true, doctor: true }` to the initial `findMany` query. Prisma handles the JOIN and everything comes back in a single query.
 
 ---
 
-#### Bug P-4: Race Condition in Queue Check-In (`routes/queue.js`)
+**Sequential database calls in doctor stats**
 
-**Issue:** Token number assignment used a read-then-write pattern:
-1. Read the current max token number for the doctor today
-2. Add 1
-3. Insert a new token with that number
+The `/doctors/stats` endpoint was running four completely independent database queries one after another using `await`. Each one waited for the previous to finish before starting. There's no reason for this since none of them depend on each other.
 
-A 350ms artificial delay was added between steps 1 and 3, making the race window extremely obvious. Two concurrent check-ins would both read the same max (e.g. 5), and both create token #6 — a duplicate.
-
-**Fix:** Wrapped the entire read-then-write operation in a Prisma serializable transaction:
-
-```js
-const newToken = await prisma.$transaction(
-  async (tx) => {
-    const maxTokenResult = await tx.queueToken.aggregate({ ... });
-    const nextTokenNumber = (maxTokenResult._max.tokenNumber || 0) + 1;
-    return tx.queueToken.create({ data: { tokenNumber: nextTokenNumber, ... } });
-  },
-  { isolationLevel: 'Serializable' }
-);
-```
-
-Serializable isolation ensures no two concurrent transactions can read the same max value and both commit a duplicate number. The 350ms sleep was also removed.
+Wrapped them all in `Promise.all()` so they run in parallel. Response time dropped noticeably.
 
 ---
 
-### Category 3: Database Inefficiencies
+**The reports endpoint was painfully slow**
+
+This was the worst performance bug. The admin reports endpoint looped through every doctor and ran 5 separate database queries per doctor, all sequentially. And on top of that, there was an artificial `setTimeout` delay of 80ms per doctor, supposedly to "ensure the database connection doesn't drop" — which makes no sense.
+
+With 5 doctors that's already 400ms of fake waiting plus 25+ database round trips. I rewrote it to use `Promise.all` so all doctor queries run in parallel, and I removed the sleep entirely. It went from 600ms+ down to under 50ms.
 
 ---
 
-#### Bug D-1: In-Memory Pagination (`routes/patients.js`)
+**Race condition in queue check-in**
 
-**Issue:** The patients endpoint fetched **all patients from the database** into Node.js memory, then filtered and paginated in JavaScript using `.filter()` and `.slice()`. As the patient count grows, this transfers hundreds of megabytes of data across the network only to discard most of it.
+The queue check-in had a textbook race condition. The code would read the current maximum token number, then wait (there was a 350ms artificial delay), then insert a new token with max + 1. If two patients checked in at the same time, both requests would read the same max value, and both would try to create the same token number — resulting in duplicates.
 
-**Fix:** Moved all filtering, sorting, and pagination into the SQL query using Prisma's `where`, `skip`, `take`, and a parallel `count` query:
-
-```js
-const [totalPatients, patients] = await Promise.all([
-  prisma.patient.count({ where }),
-  prisma.patient.findMany({ where, skip: offset, take: limit }),
-]);
-```
+I fixed this by wrapping the read-and-write in a Prisma `$transaction` with `isolationLevel: 'Serializable'`. With serializable isolation, PostgreSQL guarantees that two concurrent transactions can't both read the same max and both succeed. One of them gets forced to retry. The 350ms sleep was also removed.
 
 ---
 
-#### Bug D-2: Missing Database Indexes (`prisma/schema.prisma`)
-
-**Issue:** Several columns used heavily in `WHERE` clauses had no indexes, causing full table scans at scale:
-
-- `Doctor.specialization` — used in filter queries
-- `Doctor.department` — used in Surgery count query
-- `Appointment.(doctorId, status)` — used in doctor worklist queries
-- `Appointment.patientId` — foreign key with no index
-- `Appointment.appointmentDate` — used in ordering/range queries
-- `QueueToken.(doctorId, createdAt)` — used in daily token aggregation
-- `QueueToken.status` — used in frequent status filter queries
-
-**Fix:** Added `@@index` declarations to all relevant models in `schema.prisma`.
+### 3. Database Issues
 
 ---
 
-### Category 4: Frontend Issues
+**Fetching everything into memory for pagination**
+
+The patients list endpoint was fetching ALL patients from the database, loading them into a JavaScript array, then filtering and slicing in Node.js to simulate pagination. This completely defeats the purpose of a database.
+
+Replaced it with proper SQL-level filtering using Prisma's `where`, `skip`, and `take`, plus a `count` query running in parallel to get the total. Only the 5 records for the current page ever leave the database.
 
 ---
 
-#### Bug F-1: Memory Leak — `setInterval` Without Cleanup (`app/queue/page.js`)
+**Missing indexes on important columns**
 
-**Issue:** The queue monitor page started a `setInterval` polling every 3 seconds but never returned a cleanup function from `useEffect`. Every time the user navigated to the queue page and back, a new interval was created without the old one being cleared. After 10 navigations there were 10 parallel timers polling the server simultaneously, causing memory bloat, increasing server load, and triggering state updates on unmounted components (React warning: "Can't perform state update on unmounted component").
+Looking at the Prisma schema, several columns that are heavily used in WHERE clauses had no indexes at all — things like `Doctor.specialization`, `Doctor.department`, `Appointment.doctorId` + `status` together, `Appointment.patientId`, and `QueueToken.status`. Without indexes, every filter query does a full table scan.
 
-```js
-// BEFORE — leaks on every mount:
-useEffect(() => {
-  const intervalId = setInterval(() => { fetchQueueData(); }, 3000);
-  // Missing return!
-}, []);
-```
-
-**Fix:**
-
-```js
-// AFTER — cleans up on unmount:
-useEffect(() => {
-  const intervalId = setInterval(() => { fetchQueueData(); }, 3000);
-  return () => clearInterval(intervalId);  // ← cleanup
-}, [fetchQueueData]);
-```
+Added `@@index` declarations for all of them in the schema.
 
 ---
 
-#### Bug F-2: Null Reference Crash on Patient Medical History (`app/dashboard/page.js`)
-
-**Issue:** When a doctor clicked a patient name to view their medical records, the dashboard rendered:
-
-```js
-{selectedPatientHistory.medicalHistory.toUpperCase()}
-```
-
-Four patients in the seed data have `medicalHistory: null` (Bruce Wayne, Clark Kent, Diana Prince). Clicking any of them threw a runtime exception: `Cannot read properties of null (reading 'toUpperCase')` and crashed the entire React component tree.
-
-**Fix:** Added a null check with a fallback message:
-
-```js
-{selectedPatientHistory.medicalHistory
-  ? selectedPatientHistory.medicalHistory.toUpperCase()
-  : 'No medical history on record.'}
-```
+### 4. Frontend Issues
 
 ---
 
-#### Bug F-3: Hardcoded API URL (`context/AuthContext.js`, `app/queue/page.js`)
+**Memory leak in the queue monitor page**
 
-**Issue:** `http://localhost:5000/api` was hardcoded in two separate files. This makes the app impossible to deploy without manually editing source code, and creates a maintenance nightmare if the backend URL ever changes.
+The public queue page polls the backend every 3 seconds using `setInterval`. The problem was that the `useEffect` hook never returned a cleanup function. So every time you navigated to the queue page and back, a new interval was created. Navigate 10 times and you have 10 timers all hammering the server simultaneously, and React would throw warnings about state updates on unmounted components.
 
-**Fix:** Read from `process.env.NEXT_PUBLIC_API_BASE_URL` with a localhost fallback:
-
-```js
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000/api';
-```
-
-A `NEXT_PUBLIC_API_BASE_URL` variable is now set in `.env.local` for local development and can be configured per-environment in Vercel's dashboard.
+Fix is literally one line — `return () => clearInterval(intervalId)` at the end of the `useEffect`.
 
 ---
 
-### Category 5: Incomplete Feature
+**App crashing when a patient has no medical history**
+
+The doctor dashboard was calling `.toUpperCase()` directly on `patient.medicalHistory` without checking if it was null first. Four patients in the seed data have `medicalHistory: null` (Bruce Wayne, Clark Kent, Diana Prince, and one more). Clicking any of them in the appointment list would throw a runtime error and crash the whole page.
+
+Added a null check — if medical history is null, show "No medical history on record." instead of crashing.
 
 ---
 
-#### Bug I-1: Missing Patient History Records Page
+**API URL hardcoded in source code**
 
-**Issue:** The doctor's appointment worklist displayed a "View Diagnostic Reports Details" link pointing to `/patients/[id]/history-records`. This route did not exist, causing a 404 for every doctor who clicked it.
+The backend URL `http://localhost:5000/api` was hardcoded in two different places — `AuthContext.js` and `queue/page.js`. This makes the app impossible to deploy without manually editing source code.
 
-**Fix:** Created [frontend/src/app/patients/[id]/history-records/page.js](frontend/src/app/patients/%5Bid%5D/history-records/page.js) — a complete page that:
-- Fetches the patient by ID from the API
-- Displays their name, age, gender, contact, and email
-- Shows the full medical history (or a "no history on record" message if null)
-- Lists all appointments with date, time, reason, and status
-- Has a Back to Dashboard navigation link
-- Handles loading, error, and empty states
+Moved it to a `NEXT_PUBLIC_API_BASE_URL` environment variable with a localhost fallback. The value gets set in `.env.local` for local development and in Vercel's environment settings for production.
 
 ---
 
-## Optimizations Summary Table
+### 5. Incomplete Feature
 
-| # | Category | File | Before | After |
+---
+
+**Missing patient history page**
+
+The doctor's appointment list had a "View Diagnostic Reports Details" link for each patient that pointed to `/patients/[id]/history-records`. This route didn't exist — clicking it gave a 404.
+
+I built the page from scratch. It shows the patient's basic info (name, age, gender, contact), their full medical history with a proper fallback if none is recorded, and a table of all their past appointments with dates, reasons, and statuses. It also has proper loading and error states, and a back button to return to the dashboard.
+
+---
+
+## Summary Table
+
+| # | Category | File | Bug | Fix |
 |---|---|---|---|---|
-| S-1 | Security | `middleware/auth.js` | Admin check bypassed | Role check restored |
-| S-2 | Security | `middleware/auth.js` | `ignoreExpiration: true`, 365d tokens | Expiry enforced, 24h tokens |
-| S-3 | Security | `routes/doctors.js` | `$queryRawUnsafe` + string concat | Prisma `findMany` with parameterization |
-| S-4 | Security | `routes/auth.js` | Passwords logged, hash in response | Logs removed, safe response, no stack trace |
-| P-1 | Performance | `routes/appointments.js` | 1 + 2N queries (N+1) | 1 query with `include` |
-| P-2 | Performance | `routes/doctors.js` | 4 sequential awaits | `Promise.all()` parallel |
-| P-3 | Performance | `routes/reports.js` | 5N queries + 80ms×N delay | Parallel Promise.all per doctor, no sleep |
-| P-4 | Performance | `routes/queue.js` | Read-write race + 350ms sleep | Serializable transaction, no sleep |
-| D-1 | Database | `routes/patients.js` | All rows fetched into memory | SQL `skip`/`take` + `count` |
-| D-2 | Database | `prisma/schema.prisma` | No indexes on 7 key columns | `@@index` added to all |
-| F-1 | Frontend | `app/queue/page.js` | Interval never cleared (memory leak) | `return () => clearInterval(id)` added |
-| F-2 | Frontend | `app/dashboard/page.js` | `.toUpperCase()` on null crashes app | Null check + fallback message |
-| F-3 | Frontend | `AuthContext.js`, `queue/page.js` | Hardcoded `localhost:5000` | `NEXT_PUBLIC_API_BASE_URL` env variable |
-| I-1 | Incomplete | `patients/[id]/history-records/` | 404 missing page | Full patient history page built |
+| 1 | Security | auth.js (middleware) | Admin check commented out | Restored the role check |
+| 2 | Security | auth.js (middleware) | Tokens never expire | Removed ignoreExpiration, set 24h expiry |
+| 3 | Security | routes/doctors.js | SQL injection via raw query | Replaced with Prisma findMany |
+| 4 | Security | routes/auth.js | Password logging + hash in response | Removed logs, filtered response |
+| 5 | Performance | routes/appointments.js | N+1 queries | Used Prisma include |
+| 6 | Performance | routes/doctors.js | Sequential async calls | Used Promise.all |
+| 7 | Performance | routes/reports.js | Nested loop + fake delays | Parallel Promise.all, removed sleep |
+| 8 | Performance | routes/queue.js | Race condition + 350ms sleep | Serializable transaction, removed sleep |
+| 9 | Database | routes/patients.js | In-memory pagination | SQL skip/take/count |
+| 10 | Database | prisma/schema.prisma | Missing indexes | Added @@index to 7 columns |
+| 11 | Frontend | app/queue/page.js | Memory leak (no clearInterval) | Added cleanup return |
+| 12 | Frontend | app/dashboard/page.js | Null crash on medicalHistory | Added null check |
+| 13 | Frontend | AuthContext.js + queue/page.js | Hardcoded localhost URL | NEXT_PUBLIC_API_BASE_URL env var |
+| 14 | Feature | patients/[id]/history-records | Page didn't exist (404) | Built the full page |
 
 ---
 
-## Remaining Known Issues
+## What I didn't fix (and why)
 
-The following issues exist in the codebase but were **intentionally not fixed** as they are lower priority and the assignment note says "You are NOT expected to fix everything":
+There were a few things I noticed but chose not to fix because the assignment explicitly says you're not expected to fix everything, and I wanted to be honest about prioritization.
 
-1. **Search triggers re-fetch on every keystroke** — The patient search `useEffect` runs `fetchPatients` on every character typed. A debounce (e.g. 300ms via `setTimeout`) would significantly reduce API calls. Not fixed because it requires additional state management and the current behavior is functional.
+**Patient search re-fetches on every keystroke** — The `useEffect` that calls `fetchPatients` runs on every character typed in the search box. A debounce of 300ms would fix this. I skipped it because it's a UX improvement rather than a bug and the backend search is fast enough.
 
-2. **Login page uses `type="text"` for email field** — Should be `type="email"` to enable browser-native validation. Low severity cosmetic issue.
+**No rate limiting on login** — The login endpoint has no protection against brute force attempts. In production you'd add `express-rate-limit`. I didn't implement it because it would add a dependency and wasn't part of the five bug categories.
 
-3. **No token refresh / silent re-auth** — After 24 hours, users are logged out without warning. A refresh token flow would improve UX but is a larger feature outside scope.
-
-4. **CORS set to open in development** — The backend CORS is restricted by `FRONTEND_URL` env variable in production, but all origins are allowed locally. This is acceptable for development.
-
-5. **No rate limiting on auth endpoints** — The login endpoint has no brute-force protection. In production, `express-rate-limit` should be applied to `/api/auth/login`.
+**Token refresh not implemented** — After 24 hours the user gets logged out. A proper refresh token flow would handle this silently. Left it out because it's a significant feature addition.
 
 ---
 
-## Approach & Reasoning
-
-### Prioritization Strategy
-
-I prioritized issues in this order:
-1. **Security first** — A SQL injection vulnerability can expose the entire database. A bypassed admin check allows data destruction. These were fixed immediately.
-2. **Performance bottlenecks that block functionality** — The race condition in queue check-in could corrupt data (duplicate tokens). The N+1 query problem makes the app unusable at scale.
-3. **Database** — Indexes and proper pagination are foundational. Fetching all rows into memory is a ticking time bomb.
-4. **Frontend crashes** — A crash that prevents a doctor from viewing patient history is a functional blocker.
-5. **Incomplete features** — The missing history page is a UX gap, not a crash, so it came last.
-
-### Key Engineering Decisions
-
-**Serializable Transaction for Queue Check-in**  
-I chose a database-level serializable transaction over an application-level mutex or Redis lock because:
-- It works without any additional infrastructure
-- PostgreSQL's serializable isolation is proven and battle-tested
-- It scales correctly even across multiple backend instances
-
-**Prisma `findMany` Instead of Raw SQL for Doctors**  
-Some candidates might try to fix the SQL injection by sanitizing the input. I chose to eliminate raw SQL entirely because:
-- Input sanitization can have edge cases
-- Prisma's query builder provides parameterization by default
-- The Prisma API is more readable and maintainable
-
-**`Promise.all` Pattern Throughout**  
-I applied `Promise.all` consistently in three different places (doctor stats, reports, patient pagination). This is a simple but impactful pattern because the database I/O is the bottleneck, and JavaScript's single-threaded event loop can handle many concurrent database connections without blocking.
-
----
-
-## Local Setup
+## How to run locally
 
 ```bash
-# 1. Start database
+# Start the database
 docker-compose up -d
 
-# 2. Install dependencies
+# Install dependencies
 cd backend && npm install
 cd ../frontend && npm install
 
-# 3. Create environment file
+# Set up environment
 cd backend && cp .env.example .env
 
-# 4. Push schema and seed database
+# Push schema and seed data
 cd backend && npx prisma db push && node prisma/seed.js
 
-# 5. Start both servers
-cd backend && npm run dev          # http://localhost:5000
-cd frontend && npm run dev         # http://localhost:3000
+# Start both servers
+cd backend && npm run dev       # runs on http://localhost:5000
+cd frontend && npm run dev      # runs on http://localhost:3000
 ```
 
-**Test accounts (password: `password123`):**
-
-| Role | Email |
-|---|---|
-| Admin | admin@haqms.com |
-| Receptionist | reception1@haqms.com |
-| Doctor | doctor1@haqms.com |
+Test accounts (password is `password123` for all):
+- **Admin** — admin@haqms.com
+- **Receptionist** — reception1@haqms.com  
+- **Doctor** — doctor1@haqms.com
 
 ---
 
-*Documentation prepared for Figital Labs internship evaluation.*
+## Deployed URLs
+
+- **Frontend** — https://haqms-q1qr.vercel.app
+- **Backend** — https://haqms-backend-eight.vercel.app
+- **GitHub** — https://github.com/PiyushSolanki038/HAQMS
