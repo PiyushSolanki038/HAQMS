@@ -107,7 +107,8 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('haqms_user');
     setToken(null);
     setUser(null);
-    router.push('/login');
+    // Use window.location for a full page reload to clear all state cleanly
+    window.location.href = '/login';
   };
 
   return (
